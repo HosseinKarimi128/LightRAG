@@ -300,15 +300,27 @@ async def openai_complete_if_cache(
     api_model = azure_deployment if use_azure and azure_deployment else model
 
     try:
+        # Check if we should use model_id parameter instead of model
+        use_model_id = os.getenv("LLM_USE_MODEL_ID_PARAM", "false").lower() == "true"
+
         # Don't use async with context manager, use client directly
-        if "response_format" in kwargs:
-            response = await openai_async_client.chat.completions.parse(
-                model=api_model, messages=messages, **kwargs
-            )
+        if use_model_id:
+            # Use model_id instead of model parameter for custom gateways
+            api_params = {"extra_body":{"model_id": api_model}, "messages": messages, "model": 'fake_model'}
+            api_params.update(kwargs)
+            if "response_format" in kwargs:
+                response = await openai_async_client.chat.completions.parse(**api_params)
+            else:
+                response = await openai_async_client.chat.completions.create(**api_params)
         else:
-            response = await openai_async_client.chat.completions.create(
-                model=api_model, messages=messages, **kwargs
-            )
+            if "response_format" in kwargs:
+                response = await openai_async_client.chat.completions.parse(
+                    model=api_model, messages=messages, **kwargs
+                )
+            else:
+                response = await openai_async_client.chat.completions.create(
+                    model=api_model, messages=messages, **kwargs
+                )
     except APITimeoutError as e:
         logger.error(f"OpenAI API Timeout Error: {e}")
         await openai_async_client.close()  # Ensure client is closed
@@ -753,12 +765,23 @@ async def openai_embed(
         # For Azure OpenAI, we must use the deployment name instead of the model name
         api_model = azure_deployment if use_azure and azure_deployment else model
 
+        # Check if we should use model_id parameter instead of model for embeddings
+        use_model_id = os.getenv("EMBEDDING_USE_MODEL_ID_PARAM", "false").lower() == "true"
+
         # Prepare API call parameters
-        api_params = {
-            "model": api_model,
-            "input": texts,
-            "encoding_format": "base64",
-        }
+        if use_model_id:
+            api_params = {
+                "extra_body":{"model_id": api_model},
+                "input": texts,
+                "encoding_format": "base64",
+                "model": "fake_model"
+            }
+        else:
+            api_params = {
+                "model": api_model,
+                "input": texts,
+                "encoding_format": "base64",
+            }
 
         # Add dimensions parameter only if embedding_dim is provided
         if embedding_dim is not None:
