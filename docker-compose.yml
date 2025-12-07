@@ -1,12 +1,12 @@
 services:
   lightrag:
     container_name: lightrag
-    image: ghcr.io/hkuds/lightrag:latest
+    # image: ghcr.io/hkuds/lightrag:latest
     build:
       context: .
       dockerfile: Dockerfile
       tags:
-        - ghcr.io/hkuds/lightrag:latest
+        - registry.hamdocker.ir/hosseinkarimi0128/hoka-rag-small-app:0.2.3
     ports:
       - "${PORT:-9621}:9621"
     volumes:
