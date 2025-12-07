@@ -197,9 +197,9 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60, lim
     combined_auth = get_combined_auth_dependency(api_key)
 
     # Apply rate limiting if limiter is provided - configurable via environment variables
-    query_rate_limit = os.getenv("QUERY_RATE_LIMIT", "1/hour")  # Default: 5 queries per minute
-    stream_rate_limit = os.getenv("STREAM_QUERY_RATE_LIMIT", "1/hour")  # Default: 3 stream queries per minute (more resource-intensive)
-    data_rate_limit = os.getenv("DATA_RATE_LIMIT", "10/minute")  # Default: 10 data queries per minute
+    query_rate_limit = os.getenv("QUERY_RATE_LIMIT", "1/hour") 
+    stream_rate_limit = os.getenv("STREAM_QUERY_RATE_LIMIT", "1/hour") 
+    data_rate_limit = os.getenv("DATA_RATE_LIMIT", "10/minute") 
     logger.info(
         f"Query route limits: /query={query_rate_limit}, /query/stream={stream_rate_limit}, /query/data={data_rate_limit}"
     )
