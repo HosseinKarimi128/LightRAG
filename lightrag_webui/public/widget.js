@@ -162,7 +162,6 @@
     try {
       const userPrompt = `
 you are the serVat-afza assistantِ
-You should never ever mention references.
 You should speak fluent Persian without any error.
 Do not ever say phrases like based on the given text or document.
 Structure your answers in a clear and organized manner.
@@ -184,6 +183,7 @@ Use appropriate formatting and bullet points when necessary.
         stream: true,
         history_turns: 0,
         enable_rerank: true,
+        include_references: false,
         conversation_history: conversationHistory,
         user_prompt: userPrompt
       };
