@@ -3,12 +3,15 @@ This module contains all query-related routes for the LightRAG API.
 """
 
 import json
+import os
 from typing import Any, Dict, List, Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from lightrag.base import QueryParam
 from lightrag.api.utils_api import get_combined_auth_dependency
 from lightrag.utils import logger
 from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 router = APIRouter(tags=["query"])
 
@@ -190,8 +193,19 @@ class StreamChunkResponse(BaseModel):
     )
 
 
-def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
+def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60, limiter: Limiter = None):
     combined_auth = get_combined_auth_dependency(api_key)
+
+    # Apply rate limiting if limiter is provided - configurable via environment variables
+    query_rate_limit = os.getenv("QUERY_RATE_LIMIT", "1/hour")  # Default: 5 queries per minute
+    stream_rate_limit = os.getenv("STREAM_QUERY_RATE_LIMIT", "1/hour")  # Default: 3 stream queries per minute (more resource-intensive)
+    data_rate_limit = os.getenv("DATA_RATE_LIMIT", "10/minute")  # Default: 10 data queries per minute
+    logger.info(
+        f"Query route limits: /query={query_rate_limit}, /query/stream={stream_rate_limit}, /query/data={data_rate_limit}"
+    )
+    query_decorator = limiter.limit(query_rate_limit) if limiter else lambda f: f
+    stream_decorator = limiter.limit(stream_rate_limit) if limiter else lambda f: f
+    data_decorator = limiter.limit(data_rate_limit) if limiter else lambda f: f
 
     @router.post(
         "/query",
@@ -322,7 +336,8 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             },
         },
     )
-    async def query_text(request: QueryRequest):
+    @query_decorator
+    async def query_text(request: Request, query_request: QueryRequest):
         """
         Comprehensive RAG query endpoint with non-streaming response. Parameter "stream" is ignored.
 
@@ -402,14 +417,14 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                 - 500: Internal processing error (e.g., LLM service unavailable)
         """
         try:
-            param = request.to_query_params(
+            param = query_request.to_query_params(
                 False
             )  # Ensure stream=False for non-streaming endpoint
             # Force stream=False for /query endpoint regardless of include_references setting
             param.stream = False
 
             # Unified approach: always use aquery_llm for both cases
-            result = await rag.aquery_llm(request.query, param=param)
+            result = await rag.aquery_llm(query_request.query, param=param)
 
             # Extract LLM response and references from unified result
             llm_response = result.get("llm_response", {})
@@ -422,7 +437,7 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                 response_content = "No relevant context found for the query."
 
             # Enrich references with chunk content if requested
-            if request.include_references and request.include_chunk_content:
+            if query_request.include_references and query_request.include_chunk_content:
                 chunks = data.get("chunks", [])
                 # Create a mapping from reference_id to chunk content
                 ref_id_to_content = {}
@@ -445,7 +460,7 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                 references = enriched_references
 
             # Return response with or without references based on request
-            if request.include_references:
+            if query_request.include_references:
                 return QueryResponse(response=response_content, references=references)
             else:
                 return QueryResponse(response=response_content, references=None)
@@ -532,7 +547,8 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             },
         },
     )
-    async def query_text_stream(request: QueryRequest):
+    @stream_decorator
+    async def query_text_stream(request: Request, query_request: QueryRequest):
         """
         Advanced RAG query endpoint with flexible streaming response.
 
@@ -661,13 +677,13 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
         """
         try:
             # Use the stream parameter from the request, defaulting to True if not specified
-            stream_mode = request.stream if request.stream is not None else True
-            param = request.to_query_params(stream_mode)
+            stream_mode = query_request.stream if query_request.stream is not None else True
+            param = query_request.to_query_params(stream_mode)
 
             from fastapi.responses import StreamingResponse
 
             # Unified approach: always use aquery_llm for all cases
-            result = await rag.aquery_llm(request.query, param=param)
+            result = await rag.aquery_llm(query_request.query, param=param)
 
             async def stream_generator():
                 # Extract references and LLM response from unified result
@@ -675,7 +691,7 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                 llm_response = result.get("llm_response", {})
 
                 # Enrich references with chunk content if requested
-                if request.include_references and request.include_chunk_content:
+                if query_request.include_references and query_request.include_chunk_content:
                     data = result.get("data", {})
                     chunks = data.get("chunks", [])
                     # Create a mapping from reference_id to chunk content
@@ -700,7 +716,7 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
 
                 if llm_response.get("is_streaming"):
                     # Streaming mode: send references first, then stream response chunks
-                    if request.include_references:
+                    if query_request.include_references:
                         yield f"{json.dumps({'references': references})}\n"
 
                     response_stream = llm_response.get("response_iterator")
@@ -720,7 +736,7 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
 
                     # Create complete response object
                     complete_response = {"response": response_content}
-                    if request.include_references:
+                    if query_request.include_references:
                         complete_response["references"] = references
 
                     yield f"{json.dumps(complete_response)}\n"
@@ -1035,7 +1051,8 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             },
         },
     )
-    async def query_data(request: QueryRequest):
+    @data_decorator
+    async def query_data(request: Request, query_request: QueryRequest):
         """
         Advanced data retrieval endpoint for structured RAG analysis.
 
@@ -1139,8 +1156,8 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             as structured data analysis typically requires source attribution.
         """
         try:
-            param = request.to_query_params(False)  # No streaming for data endpoint
-            response = await rag.aquery_data(request.query, param=param)
+            param = query_request.to_query_params(False)  # No streaming for data endpoint
+            response = await rag.aquery_data(query_request.query, param=param)
 
             # aquery_data returns the new format with status, message, data, and metadata
             if isinstance(response, dict):

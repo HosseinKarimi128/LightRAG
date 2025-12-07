@@ -19,6 +19,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from pathlib import Path
 import configparser
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from ascii_colors import ASCIIColors
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -404,7 +407,14 @@ def create_app(args):
         "tryItOutEnabled": True,
     }
 
+    # Create rate limiter with IP-based limiter
+    limiter = Limiter(key_func=get_remote_address)
+
     app = FastAPI(**app_kwargs)
+
+    # Add rate limit exception handler
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     # Add custom validation error handler for /query/data endpoint
     @app.exception_handler(RequestValidationError)
@@ -1042,7 +1052,7 @@ def create_app(args):
             api_key,
         )
     )
-    app.include_router(create_query_routes(rag, api_key, args.top_k))
+    app.include_router(create_query_routes(rag, api_key, args.top_k, limiter))
     app.include_router(create_graph_routes(rag, api_key))
 
     # Add Ollama API routes
