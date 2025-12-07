@@ -408,7 +408,51 @@ def create_app(args):
     }
 
     # Create rate limiter with IP-based limiter
-    limiter = Limiter(key_func=get_remote_address)
+    # Check if Redis is available for persistent rate limiting across multiple workers
+    redis_url = os.getenv("REDIS_URL")
+    redis_host = os.getenv("REDIS_HOST", "localhost")
+    redis_port = int(os.getenv("REDIS_PORT", 6379))
+    redis_db = int(os.getenv("REDIS_DB", 0))
+
+    def get_real_ipaddr(request: Request):
+        """Extract real client IP from request, handling common proxy headers"""
+        # Check for forwarded IP headers (commonly set by reverse proxies like nginx)
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            # X-Forwarded-For can contain multiple IPs, first one is usually the real client
+            client_ip = forwarded_for.split(",")[0].strip()
+            if client_ip and client_ip != "unknown":
+                logger.debug(f"Rate limiting: Using X-Forwarded-For IP: {client_ip}")
+                return client_ip
+
+        # Check for other common proxy headers
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            real_ip = real_ip.strip()
+            logger.debug(f"Rate limiting: Using X-Real-IP: {real_ip}")
+            return real_ip
+
+        # Fall back to the direct remote address
+        direct_ip = get_remote_address(request)
+        logger.debug(f"Rate limiting: Using direct remote address: {direct_ip}")
+        return direct_ip
+
+    if redis_url or os.getenv("USE_REDIS_FOR_RATE_LIMIT", "").lower() == "true":
+        try:
+            import redis
+            # Try to connect to Redis
+            redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, decode_responses=False)
+            # Test the connection
+            redis_client.ping()
+            # Use Redis for rate limit storage with improved IP detection
+            limiter = Limiter(key_func=get_real_ipaddr, storage_uri=redis_url or f"redis://{redis_host}:{redis_port}/{redis_db}")
+            logger.info("Rate limiter configured with Redis storage")
+        except Exception as e:
+            logger.warning(f"Could not connect to Redis for rate limiting ({e}), falling back to memory storage")
+            limiter = Limiter(key_func=get_real_ipaddr)
+    else:
+        # Use memory storage (default behavior) with improved IP detection
+        limiter = Limiter(key_func=get_real_ipaddr)
 
     app = FastAPI(**app_kwargs)
 

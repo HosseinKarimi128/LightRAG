@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       tags:
-        - registry.hamdocker.ir/hosseinkarimi0128/hoka-rag-small-app:0.2.3
+        - registry.hamdocker.ir/hosseinkarimi0128/hoka-rag-small-app:0.3.0
     ports:
       - "${PORT:-9621}:9621"
     volumes:
